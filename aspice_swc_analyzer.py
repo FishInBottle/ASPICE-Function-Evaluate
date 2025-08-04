@@ -20,24 +20,23 @@ class CFunctionAnalyzer:
         }
 
         # Config file
-        self.components = []  # For [component]
-        self.scopes = []      # For [scope]
-        self.ignores = []     # For [ignore]
-        self.share_resources = []  # For [share_resource]
+        self.components = []        # For [component]
+        self.scopes = []            # For [scope]
+        self.ignores = []           # For [ignore]
+        self.share_resources = []   # For [share_resource]
 
         # Analyzed result
-        self.all_files = []   # All files to be analyzed, i.e. scopes - ignores
-        self.component_files = set()  # All files for the component
-        self.out_of_component_files = set()  # All files out of the component
+        self.all_files = []                     # All files to be analyzed, i.e. scopes - ignores
+        self.component_files = set()            # All files for the "component" set
+        self.out_of_component_files = set()     # All files for the "out of the component" set
 
         # Function info - use filepath as key for dictionary
-        self.file_functions = defaultdict(dict)  # {file_path: {func_name: func_info}}
-        self.function_locations = defaultdict(list)  # {func_name: [(file_path, line_num)]}
-        self.call_locations = defaultdict(list)  # {(caller, callee): [(file_path, line_num)]}
-
-        # 新增：共用資源相關
-        self.function_resource_access = defaultdict(set)  # {func_name: set(accessed_resources)}
-        self.resource_access_details = defaultdict(list)  # {func_name: [(resource, file_path, access_type)]}
+        self.file_functions = defaultdict(dict)             # {file_path: {func_name: func_info}}
+        self.function_locations = defaultdict(list)         # {func_name: [(file_path, line_num)]}
+        self.call_locations = defaultdict(list)             # {(caller, callee): [(file_path, line_num)]}
+        # Share resource access info
+        self.function_resource_access = defaultdict(set)    # {func_name: set(accessed_resources)}
+        self.resource_access_details = defaultdict(list)    # {func_name: [(resource, file_path, access_type)]}
 
         # 舊的資料結構保留相容性
         self.interfaces = set()
@@ -56,7 +55,7 @@ class CFunctionAnalyzer:
             with open(config_path, 'r', encoding='latin-1') as f:
                 content = f.read()
 
-        # Remove C-style comments
+        # Remove C-style comments in config file
         content = self.remove_comments_and_strings(content)
 
         # Parsing for component
@@ -80,7 +79,7 @@ class CFunctionAnalyzer:
             paths = [line.strip() for line in match.strip().split('\n') if line.strip()]
             self.ignores.extend(paths)
 
-        # 新增：Parsing for share_resource
+        # Parsing for share_resource
         share_resource_pattern = r'\[share_resource\](.*?)\[/share_resource\]'
         share_resource_matches = re.findall(share_resource_pattern, content, re.DOTALL | re.IGNORECASE)
         for match in share_resource_matches:
@@ -127,7 +126,7 @@ class CFunctionAnalyzer:
 
         self.all_files = valid_files
 
-        # 分類component和out of component檔案
+        # Separate the files into component-related and out-of-component types
         component_file_set = set()
         for comp_path in self.components:
             if comp_path.endswith('.c') and os.path.isfile(comp_path):
@@ -169,110 +168,43 @@ class CFunctionAnalyzer:
         return calls_with_location
 
     def analyze_shared_resource_access(self, content, func_name, file_path):
-        """分析函數中的共用資源存取"""
+        """Analyze shared resource access in function body"""
         if not self.share_resources:
             return
 
-        # 移除註解但保留MACRO定義，因為共用資源可能透過MACRO存取
+        # Remove comments and strings
         processed_content = self.remove_comments_and_strings(content)
 
         accessed_resources = set()
         access_details = []
 
         for resource in self.share_resources:
-            # 檢查直接存取和透過MACRO/inline function存取
+            # For each share resource, check if it is accessed in the function
             if self.check_resource_access_in_function(processed_content, resource, func_name):
                 accessed_resources.add(resource)
                 access_type = self.get_resource_access_type(processed_content, resource)
                 access_details.append((resource, file_path, access_type))
 
-        # 儲存結果
+        # Store the results
         self.function_resource_access[func_name].update(accessed_resources)
         self.resource_access_details[func_name].extend(access_details)
 
     def check_resource_access_in_function(self, content, resource, func_name):
-        """檢查函數是否存取指定的共用資源（包括透過MACRO/inline function）"""
-        # 方法1：直接存取模式
+        """Check the count of share resources used in the function（It may includes MACRO & inline function）"""
         direct_patterns = [
-            rf'\b{re.escape(resource)}\b',
-            rf'->\s*{re.escape(resource)}\b',
-            rf'\.\s*{re.escape(resource)}\b',
-            rf'\b{re.escape(resource)}\s*\[',
+            rf'\b{re.escape(resource)}\b',      # Direct access to resource
+            rf'->\s*{re.escape(resource)}\b',   # Access through pointer dereference
+            rf'\.\s*{re.escape(resource)}\b',   # Access through struct member
+            rf'\b{re.escape(resource)}\s*\[',   # Array access
         ]
 
         for pattern in direct_patterns:
             if re.search(pattern, content, re.IGNORECASE):
                 return True
 
-        # 方法2：透過MACRO存取（例如：SPI_IS_STAT_BUSY, SPI_SET_REG等）
-        # 尋找可能包含該資源的MACRO呼叫
-        macro_patterns = [
-            # 一般MACRO呼叫模式：MACRO_NAME(...)
-            rf'\b\w*{re.escape(resource)}\w*\s*\(',
-            rf'\b\w+\s*\([^)]*{re.escape(resource)}[^)]*\)',
-            # 帶有資源名稱的MACRO
-            rf'\b[A-Z_]*{re.escape(resource)}[A-Z_]*\s*\(',
-        ]
-
-        for pattern in macro_patterns:
-            if re.search(pattern, content, re.IGNORECASE):
-                return True
-
-        # 方法3：檢查是否有呼叫可能存取該資源的函數
-        # 這需要進一歩分析被呼叫的函數內容
-        return self.check_indirect_resource_access(content, resource, func_name)
-
-    def check_indirect_resource_access(self, content, resource, func_name):
-        """檢查是否透過呼叫其他函數間接存取資源"""
-        # 尋找函數呼叫
-        function_call_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\('
-        matches = re.finditer(function_call_pattern, content)
-
-        for match in matches:
-            called_func = match.group(1)
-            if called_func.lower() in self.c_keywords or called_func == func_name:
-                continue
-
-            # 檢查被呼叫的函數是否可能是存取該資源的MACRO或inline function
-            if self.is_resource_related_function(called_func, resource):
-                return True
-
-        return False
-
-    def is_resource_related_function(self, func_name, resource):
-        """判斷函數名稱是否與特定資源相關（可能是MACRO或inline function）"""
-        func_upper = func_name.upper()
-        resource_upper = resource.upper()
-
-        # 檢查函數名稱是否包含資源名稱
-        if resource_upper in func_upper:
-            return True
-
-        # 檢查常見的存取模式前綴/後綴
-        access_patterns = [
-            f'GET_{resource_upper}',
-            f'SET_{resource_upper}',
-            f'READ_{resource_upper}',
-            f'WRITE_{resource_upper}',
-            f'{resource_upper}_GET',
-            f'{resource_upper}_SET',
-            f'{resource_upper}_READ',
-            f'{resource_upper}_WRITE',
-            f'IS_{resource_upper}',
-            f'CHECK_{resource_upper}',
-            f'{resource_upper}_IS',
-            f'{resource_upper}_CHECK',
-        ]
-
-        for pattern in access_patterns:
-            if pattern in func_upper:
-                return True
-
-        return False
-
     def get_resource_access_type(self, content, resource):
-        """取得資源存取類型"""
-        # 尋找資源的所有存取位置
+        """Get the access type(R/W) of a share resource"""
+        # Find all patterns that match the resource
         patterns = [
             rf'\b{re.escape(resource)}\b',
             rf'->\s*{re.escape(resource)}\b',
@@ -291,17 +223,17 @@ class CFunctionAnalyzer:
                 else:
                     read_indicators += 1
 
-        # 如果有寫入操作，優先回傳write
+        # Return "write" first if there are any write indicators
         if write_indicators > 0:
             return "write"
         elif read_indicators > 0:
             return "read"
         else:
-            return "access"  # 透過MACRO或函數呼叫，無法確定具體類型
+            return "access"  # Accessed via MACRO or inline function, not sure the access type
 
     def determine_access_type(self, content, match_pos):
-        """判斷資源存取類型（讀取或寫入）"""
-        # 取得匹配位置前後的文字來判斷是讀取還是寫入
+        """Determine the access type of a share resource based on its position in the content"""
+        # Determine the access type according to the position of the match pattern
         start = max(0, match_pos - 100)
         end = min(len(content), match_pos + 100)
 
@@ -371,7 +303,7 @@ class CFunctionAnalyzer:
             with open(file_path, 'r', encoding='latin-1') as f:
                 content = f.read()
 
-        # 保存原始內容用於共用資源分析
+        # Keep original content for later use
         original_content = content
 
         # Preprocessing
@@ -413,7 +345,7 @@ class CFunctionAnalyzer:
                         body = self.extract_function_body_from_lines(lines, line_num-1)
                         self.analyze_function_body_calls(file_path, func_name, body, line_num)
 
-                        # 新增：分析函數體內的共用資源存取
+                        # 分析函數體內的共用資源存取
                         original_body = self.extract_function_body_from_original_content(original_content, func_name)
                         if original_body:
                             self.analyze_shared_resource_access(original_body, func_name, file_path)
@@ -421,16 +353,23 @@ class CFunctionAnalyzer:
         return file_functions
 
     def extract_function_body_from_original_content(self, content, func_name):
-        """從原始內容中提取函數體（包含MACRO）"""
-        # 首先移除註解和字串，但保留MACRO
+        """Extract function body from original content"""
+        # Remove comments and strings
         processed_content = self.remove_comments_and_strings(content)
 
-        # 尋找函數定義 - 更精確的模式匹配
-        # 考慮函數可能跨多行定義
+        # Find the function definition pattern
+        # Consider both standard and multi-line function definitions
         patterns = [
-            # 標準函數定義：返回類型 函數名(參數) {
+            # Standard single line function definition:
+            # return_type func_name(args) {
+            #   ...
+            # }
             rf'\b{re.escape(func_name)}\s*\([^{{;]*?\)\s*\{{',
-            # 可能跨行的函數定義
+            # Multi-line function definition:
+            # return_type func_name(args)
+            # {
+            #   ...
+            # }
             rf'\b{re.escape(func_name)}\s*\([^{{;]*?\)\s*[\r\n\s]*\{{',
         ]
 
@@ -443,13 +382,13 @@ class CFunctionAnalyzer:
         if not match:
             return None
 
-        # 找到函數體的開始位置（第一個{的位置）
+        # Find the start position of the function (the first '{' after the function name)
         func_start = match.start()
         brace_pos = processed_content.find('{', func_start)
         if brace_pos == -1:
             return None
 
-        # 從開始大括號位置開始計算巢狀層級
+        # Calculate the nesting level of braces from the first '{'
         brace_count = 1
         pos = brace_pos + 1
 
@@ -461,31 +400,32 @@ class CFunctionAnalyzer:
                 brace_count -= 1
             pos += 1
 
+        # Error handling: Ensure a matching closing brace was found
         if brace_count == 0:
-            # 返回函數體內容（不包括外層大括號）
+            # Back to the function
             return processed_content[brace_pos + 1:pos - 1]
         else:
-            # 如果找不到匹配的結束大括號，返回到文件結尾
+            # Back to the end of the file if no matching closing brace found
             return processed_content[brace_pos + 1:]
 
     def record_function_declaration(self, file_path, line_num, func_name):
-        """記錄函數宣告"""
+        """Record function declaration"""
         self.interfaces.add(func_name)
         self.function_locations[func_name].append((file_path, line_num))
 
     def record_function_definition(self, file_path, line_num, func_name):
-        """記錄函數定義"""
+        """Record function definition"""
         self.callers.add(func_name)
         self.function_locations[func_name].append((file_path, line_num))
 
     def record_function_call(self, file_path, line_num, func_name):
-        """記錄函數呼叫"""
+        """Record function call"""
         self.callees.add(func_name)
         # 這裡需要知道是哪個函數在呼叫，暫時記錄位置
         # 實際的caller-callee關係在analyze_function_body_calls中處理
 
     def analyze_function_body_calls(self, file_path, caller_func, body, start_line):
-        """分析函數體內的呼叫"""
+        """Analyze function calls in the function body"""
         if not body:
             return
 
@@ -499,30 +439,30 @@ class CFunctionAnalyzer:
                 if (callee_func.lower() not in self.c_keywords and
                     callee_func != caller_func):
 
-                    # 記錄呼叫關係
+                    # Record the caller-callee relationship
                     self.call_relationships[caller_func].append(callee_func)
                     self.callee_count[callee_func] += 1
 
-                    # 記錄呼叫位置
+                    # Record the call location
                     actual_line_num = start_line + rel_line_num
                     self.call_locations[(caller_func, callee_func)].append((file_path, actual_line_num))
 
     def is_inside_function_body(self, content, line_num, lines):
-        """檢查指定行是否在函數體內"""
+        """Check if the current line is inside a function body"""
         current_content = '\n'.join(lines[:line_num+1])
         open_braces = current_content.count('{')
         close_braces = current_content.count('}')
         return open_braces > close_braces
 
     def has_function_body_following(self, lines, line_num):
-        """檢查函數定義後是否有函數體"""
+        """Check if the next few lines contain a function body"""
         for i in range(line_num, min(line_num + 5, len(lines))):
             if '{' in lines[i]:
                 return True
         return False
 
     def extract_function_body_from_lines(self, lines, start_line):
-        """從行列表中提取函數體"""
+        """Extract function body from lines starting from start_line"""
         body_lines = []
         brace_count = 0
         started = False
