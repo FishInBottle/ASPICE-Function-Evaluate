@@ -8,6 +8,10 @@ import glob
 from collections import defaultdict, Counter
 from pathlib import Path
 
+# === Feature Flags start ===
+PRINT_DEBUG_INFO = False
+# === Feature Flags end   ===
+
 class CFunctionAnalyzer:
     def __init__(self):
         # Keywords for C language, would ingore them all
@@ -543,22 +547,22 @@ class CFunctionAnalyzer:
             print(f"\n{func_name}")
 
             print(f"  Interoperability: {data['interoperability']}")
-            # Debug info
-            if data['interop_details']:
-                for detail in data['interop_details']:
-                    print(f"    - {detail}")
+            if PRINT_DEBUG_INFO:
+                if data['interop_details']:
+                    for detail in data['interop_details']:
+                        print(f"    - {detail}")
 
             print(f"  Interaction: {data['interaction']}")
-            # Debug info
-            if data['interact_details']:
-                for detail in data['interact_details']:
-                    print(f"    - {detail}")
+            if PRINT_DEBUG_INFO:
+                if data['interact_details']:
+                    for detail in data['interact_details']:
+                        print(f"    - {detail}")
 
             print(f"  Criticality: {data['criticality']}")
-            # Debug info
-            if data['criticality_details']:
-                for resource, file_path in data['criticality_details']:
-                    print(f"    - Accesses {resource} in {file_path}")
+            if PRINT_DEBUG_INFO:
+                if data['criticality_details']:
+                    for resource, file_path in data['criticality_details']:
+                        print(f"    - Accesses {resource} in {file_path}")
 
     def print_legacy_results(self):
         """Output legacy results"""
