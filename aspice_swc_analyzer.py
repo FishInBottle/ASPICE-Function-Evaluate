@@ -36,9 +36,9 @@ class CFunctionAnalyzer:
         self.call_locations = defaultdict(list)             # {(caller, callee): [(file_path, line_num)]}
         # Share resource access info
         self.function_resource_access = defaultdict(set)    # {func_name: set(accessed_resources)}
-        self.resource_access_details = defaultdict(list)    # {func_name: [(resource, file_path, access_type)]}
+        self.resource_access_details = defaultdict(list)    # {func_name: [(resource, file_path)]}
 
-        # 舊的資料結構保留相容性
+        # Interfaces, Callers, Callees
         self.interfaces = set()
         self.callees = set()
         self.callers = set()
@@ -182,8 +182,7 @@ class CFunctionAnalyzer:
             # For each share resource, check if it is accessed in the function
             if self.check_resource_access_in_function(processed_content, resource, func_name):
                 accessed_resources.add(resource)
-                access_type = self.get_resource_access_type(processed_content, resource)
-                access_details.append((resource, file_path, access_type))
+                access_details.append((resource, file_path))
 
         # Store the results
         self.function_resource_access[func_name].update(accessed_resources)
@@ -201,98 +200,6 @@ class CFunctionAnalyzer:
         for pattern in direct_patterns:
             if re.search(pattern, content, re.IGNORECASE):
                 return True
-
-    def get_resource_access_type(self, content, resource):
-        """Get the access type(R/W) of a share resource"""
-        # Find all patterns that match the resource
-        patterns = [
-            rf'\b{re.escape(resource)}\b',
-            rf'->\s*{re.escape(resource)}\b',
-            rf'\.\s*{re.escape(resource)}\b',
-        ]
-
-        write_indicators = 0
-        read_indicators = 0
-
-        for pattern in patterns:
-            matches = re.finditer(pattern, content, re.IGNORECASE)
-            for match in matches:
-                access_type = self.determine_access_type(content, match.start())
-                if access_type == "write":
-                    write_indicators += 1
-                else:
-                    read_indicators += 1
-
-        # Return "write" first if there are any write indicators
-        if write_indicators > 0:
-            return "write"
-        elif read_indicators > 0:
-            return "read"
-        else:
-            return "access"  # Accessed via MACRO or inline function, not sure the access type
-
-    def determine_access_type(self, content, match_pos):
-        """Determine the access type of a share resource based on its position in the content"""
-        # Determine the access type according to the position of the match pattern
-        start = max(0, match_pos - 100)
-        end = min(len(content), match_pos + 100)
-
-        before_match = content[start:match_pos].strip()
-        after_match = content[match_pos:end].strip()
-
-        # 尋找完整的語句來判斷存取類型
-        # 向前尋找語句開始（到前一個分號或大括號）
-        stmt_start = start
-        for i in range(match_pos - 1, start - 1, -1):
-            if content[i] in ';{}':
-                stmt_start = i + 1
-                break
-
-        # 向後尋找語句結束（到下一個分號）
-        stmt_end = end
-        for i in range(match_pos, end):
-            if content[i] == ';':
-                stmt_end = i
-                break
-
-        statement = content[stmt_start:stmt_end].strip()
-
-        # 檢查寫入模式
-        write_patterns = [
-            rf'[^=!<>]=(?!=)',  # 單一等號（排除==, !=, <=, >=）
-            rf'\|=',            # |=
-            rf'&=',             # &=
-            rf'\+=',            # +=
-            rf'-=',             # -=
-            rf'\*=',            # *=
-            rf'/=',             # /=
-            rf'%=',             # %=
-            rf'\^=',            # ^=
-            rf'<<=',            # <<=
-            rf'>>=',            # >>=
-        ]
-
-        # 找到資源在語句中的位置
-        resource_pos_in_stmt = match_pos - stmt_start
-
-        # 檢查資源是否在賦值操作符左邊
-        for pattern in write_patterns:
-            matches = list(re.finditer(pattern, statement))
-            for match in matches:
-                if match.start() > resource_pos_in_stmt:
-                    # 賦值操作符在資源後面，表示資源被寫入
-                    return "write"
-
-        # 檢查是否是函數參數（通過指標傳遞可能被修改）
-        if '(' in statement and ')' in statement:
-            paren_start = statement.find('(')
-            paren_end = statement.rfind(')')
-            if paren_start < resource_pos_in_stmt < paren_end:
-                # 資源在函數參數中，可能被修改
-                return "read/write"
-
-        # 預設為讀取
-        return "read"
 
     def analyze_file_detailed(self, file_path):
         """Analyze single file"""
@@ -313,13 +220,13 @@ class CFunctionAnalyzer:
         lines = processed_content.split('\n')
         file_functions = {}
 
-        # 分析函數定義和呼叫
+        # Analyze function definitions and calls
         for line_num, line in enumerate(lines, 1):
             line = line.strip()
             if not line:
                 continue
 
-            # 檢查函數模式
+            # Check function pattern
             function_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\('
             matches = re.finditer(function_pattern, line)
 
@@ -328,24 +235,24 @@ class CFunctionAnalyzer:
                 if func_name.lower() in self.c_keywords:
                     continue
 
-                # 判斷函數類型
+                # Check if the function is a declaration, definition, or callee
                 if line.endswith(';'):
-                    # 可能是interface或callee
+                    # Could be a function declaration(interface) or a function call
                     if self.is_inside_function_body(processed_content, line_num-1, lines):
-                        # 這是函數呼叫
+                        # It's a function call, record it
                         self.record_function_call(file_path, line_num, func_name)
                     else:
-                        # 這是函數宣告
+                        # It's a function declaration (interface), record it
                         self.record_function_declaration(file_path, line_num, func_name)
                 else:
-                    # 可能是函數定義
+                    # Could be a function definition if it has a body
                     if '{' in line or self.has_function_body_following(lines, line_num-1):
                         self.record_function_definition(file_path, line_num, func_name)
-                        # 分析函數體內的呼叫
+                        # Analyze function calls in the function body
                         body = self.extract_function_body_from_lines(lines, line_num-1)
                         self.analyze_function_body_calls(file_path, func_name, body, line_num)
 
-                        # 分析函數體內的共用資源存取
+                        # Analyze shared resource access
                         original_body = self.extract_function_body_from_original_content(original_content, func_name)
                         if original_body:
                             self.analyze_shared_resource_access(original_body, func_name, file_path)
@@ -483,12 +390,12 @@ class CFunctionAnalyzer:
         return '\n'.join(body_lines) if body_lines else ""
 
     def analyze_all_functions(self):
-        """分析所有函數並分類"""
-        # 先分析所有檔案以收集函數資訊
+        """Analyze all functions and classify them"""
+        # All files in component and out of component
         for file_path in self.all_files:
             self.analyze_file_detailed(file_path)
 
-        # 分類函數
+        # Classify functions into "component" or "out of component"
         component_functions = set()
         out_of_component_functions = set()
 
@@ -504,24 +411,24 @@ class CFunctionAnalyzer:
         return component_functions, out_of_component_functions
 
     def calculate_interoperability(self, func_name, out_of_component_functions):
-        """計算單一函數的Interoperability屬性"""
+        """Calculate Interoperability property for a single function"""
         interoperability = 0
         interop_details = []
 
-        # 計算該函數被out of component呼叫的次數
+        # Calculate how many times this function is called by out of component functions
         for caller, callees in self.call_relationships.items():
-            # 檢查caller是否在out of component
+            # Check if caller is in out of component
             caller_locations = self.function_locations.get(caller, [])
             caller_in_out_component = any(file_path in self.out_of_component_files for file_path, _ in caller_locations)
 
             if caller_in_out_component and func_name in callees:
                 count = callees.count(func_name)
                 interoperability += count
-                # 收集詳細資訊
+                # Collect the file path and line number where the call occurs
                 for file_path, line_num in self.call_locations.get((caller, func_name), []):
                     interop_details.append(f"Called by {caller} ({file_path})")
 
-        # 計算該函數呼叫out of component函數的次數
+        # Calculate how many times this function calls out of component functions
         if func_name in self.call_relationships:
             for callee in self.call_relationships[func_name]:
                 callee_locations = self.function_locations.get(callee, [])
@@ -530,31 +437,31 @@ class CFunctionAnalyzer:
                 if callee_in_out_component:
                     count = self.call_relationships[func_name].count(callee)
                     interoperability += count
-                    # 收集詳細資訊
+                    # Collect the file path and line number where the call occurs
                     for file_path, line_num in self.call_locations.get((func_name, callee), []):
                         interop_details.append(f"Calls {callee} ({file_path})")
 
         return interoperability, interop_details
 
     def calculate_interaction(self, func_name, component_functions):
-        """計算單一函數的Interaction屬性"""
+        """Calculate Interaction property for a single function"""
         interaction = 0
         interact_details = []
 
-        # 計算該函數被同component其他函數呼叫的次數
+        # Calculate how many times this function is called by other functions in the component
         for caller, callees in self.call_relationships.items():
-            # 檢查caller是否在component (且不是自己)
+            # Check if caller is in component (and not itself)
             caller_locations = self.function_locations.get(caller, [])
             caller_in_component = any(file_path in self.component_files for file_path, _ in caller_locations)
 
             if caller_in_component and caller != func_name and func_name in callees:
                 count = callees.count(func_name)
                 interaction += count
-                # 收集詳細資訊
+                # Collect the file path and line number where the call occurs
                 for file_path, line_num in self.call_locations.get((caller, func_name), []):
                     interact_details.append(f"Called by {caller} ({file_path})")
 
-        # 計算該函數呼叫同component其他函數的次數
+        # Calculate how many times this function calls other functions in the component
         if func_name in self.call_relationships:
             for callee in self.call_relationships[func_name]:
                 callee_locations = self.function_locations.get(callee, [])
@@ -563,15 +470,15 @@ class CFunctionAnalyzer:
                 if callee_in_component and callee != func_name:
                     count = self.call_relationships[func_name].count(callee)
                     interaction += count
-                    # 收集詳細資訊
+                    # Collect the file path and line number where the call occurs
                     for file_path, line_num in self.call_locations.get((func_name, callee), []):
                         interact_details.append(f"Calls {callee} ({file_path})")
 
         return interaction, interact_details
 
     def calculate_criticality(self, func_name):
-        """計算單一函數的Criticality屬性"""
-        # Criticality = 該函數存取的不同共用資源數量
+        """Calculate Criticality property for a single function"""
+        # Criticality = the number of different shared resources accessed by the function
         criticality = len(self.function_resource_access.get(func_name, set()))
         criticality_details = list(self.resource_access_details.get(func_name, []))
 
@@ -604,11 +511,6 @@ class CFunctionAnalyzer:
             }
 
         return results
-
-    # # 保持向後相容性的別名
-    # def calculate_interoperability_and_interaction(self):
-    #     """向後相容性方法，委派給新的calculate_all_attributes方法"""
-    #     return self.calculate_all_attributes()
 
     def print_detailed_results(self, results):
         """Output detailed results"""
@@ -655,8 +557,8 @@ class CFunctionAnalyzer:
             print(f"  Criticality: {data['criticality']}")
             # Debug info
             if data['criticality_details']:
-                for resource, file_path, access_type in data['criticality_details']:
-                    print(f"    - Accesses {resource} ({access_type}) in {file_path}")
+                for resource, file_path in data['criticality_details']:
+                    print(f"    - Accesses {resource} in {file_path}")
 
     def print_legacy_results(self):
         """Output legacy results"""
