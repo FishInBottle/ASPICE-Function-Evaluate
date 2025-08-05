@@ -31,6 +31,7 @@ class CFunctionAnalyzer:
         self.scopes = []            # For [scope]
         self.ignores = []           # For [ignore]
         self.share_resources = []   # For [share_resource]
+        self.macros = {}            # For [macro]
 
         # Analyzed result
         self.all_files = []                     # All files to be analyzed, i.e. scopes - ignores
@@ -93,6 +94,19 @@ class CFunctionAnalyzer:
             resources = [line.strip() for line in match.strip().split('\n') if line.strip()]
             self.share_resources.extend(resources)
 
+        # Parsing for macro defines
+        macro_pattern = r'\[macro\](.*?)\[/macro\]'
+        macro_matches = re.findall(macro_pattern, content, re.DOTALL | re.IGNORECASE)
+        for match in macro_matches:
+            lines = [line.strip() for line in match.strip().split('\n') if line.strip()]
+            for line in lines:
+                if ' ' in line:
+                    key, value = line.split(None, 1)
+                    self.macros[key.strip()] = value.strip()
+                else:
+                    self.macros[line] = "1"  # Default to 1 if no value
+
+
     def collect_files_to_analyze(self):
         """Collect files to analyze"""
         all_scope_files = set()
@@ -154,9 +168,73 @@ class CFunctionAnalyzer:
         return content
 
     def remove_macros(self, content):
-        """Remove MACRO"""
-        content = re.sub(r'#.*', '', content)
-        return content
+        """Remove macros based on config file definitions"""
+        lines = content.splitlines()
+        result = []
+        skip = False
+        stack = []
+
+        def is_macro_true(macro_expr):
+            tokens = macro_expr.strip().split()
+            if len(tokens) == 1:
+                return tokens[0] in self.macros
+            elif tokens[0] == 'defined':
+                return tokens[1] in self.macros
+            elif tokens[0].startswith('!defined'):
+                macro = tokens[0][len('!defined('):-1]
+                return macro not in self.macros
+            return False
+
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+
+            if line.startswith("#if") or line.startswith("#ifdef") or line.startswith("#ifndef"):
+                condition = line[1:].strip()
+                is_true = False
+
+                if line.startswith("#ifdef"):
+                    macro = line[6:].strip()
+                    is_true = macro in self.macros
+                elif line.startswith("#ifndef"):
+                    macro = line[7:].strip()
+                    is_true = macro not in self.macros
+                else:  # #if
+                    macro = line[3:].strip()
+                    is_true = macro in self.macros or macro == "1"
+
+                stack.append((skip, is_true))
+                skip = skip or not is_true
+                i += 1
+                continue
+
+            elif line.startswith("#else"):
+                if stack:
+                    prev_skip, prev_true = stack.pop()
+                    new_true = not prev_true
+                    stack.append((prev_skip, new_true))
+                    skip = prev_skip or not new_true
+                i += 1
+                continue
+
+            elif line.startswith("#endif"):
+                if stack:
+                    prev_skip, _ = stack.pop()
+                    skip = prev_skip
+                i += 1
+                continue
+
+            elif line.startswith("#define") or line.startswith("#include"):
+                # Skip these prefix of macros
+                i += 1
+                continue
+
+            if not skip:
+                result.append(lines[i])
+            i += 1
+
+        return "\n".join(result)
+
 
     def extract_function_calls_with_location(self, content, file_path):
         """Extract function calls with location"""
@@ -260,14 +338,14 @@ class CFunctionAnalyzer:
                         self.analyze_function_body_calls(file_path, func_name, body, line_num)
 
                         # Analyze shared resource access
-                        original_body = self.extract_function_body_from_original_content(original_content, func_name)
+                        original_body = self.extract_function_body_from_content(original_content, func_name)
                         if original_body:
                             self.analyze_shared_resource_access(original_body, func_name, file_path)
 
         return file_functions
 
-    def extract_function_body_from_original_content(self, content, func_name):
-        """Extract function body from original content"""
+    def extract_function_body_from_content(self, content, func_name):
+        """Extract function body from given content"""
         # Remove comments and strings
         processed_content = self.remove_comments_and_strings(content)
 
@@ -507,7 +585,7 @@ class CFunctionAnalyzer:
                         content = f.read()
 
                 # Extract function body
-                body = self.extract_function_body_from_original_content(content, func_name)
+                body = self.extract_function_body_from_content(content, func_name)
                 if not body:
                     return 1
 
@@ -552,7 +630,9 @@ class CFunctionAnalyzer:
                     with open(file_path, 'r', encoding='latin-1') as f:
                         content = f.read()
 
-                func_body = self.extract_function_body_from_original_content(content, func_name)
+                processed_content = self.remove_macros(content)
+
+                func_body = self.extract_function_body_from_content(processed_content, func_name)
                 if not func_body:
                     return 0
 
