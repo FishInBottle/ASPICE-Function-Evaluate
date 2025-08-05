@@ -5,6 +5,9 @@ import re
 import argparse
 import os
 import glob
+import csv
+import pandas as pd
+from typing import Dict, List, Tuple
 from collections import defaultdict, Counter
 from pathlib import Path
 
@@ -488,6 +491,105 @@ class CFunctionAnalyzer:
 
         return criticality, criticality_details
 
+    def calculate_cyclomatic_complexity(self, func_name):
+        """Calculate Cyclomatic Complexity of the function"""
+        func_locations = self.function_locations.get(func_name, [])
+        if not func_locations:
+            return 1  # Default complexity = 1
+
+        for file_path, _ in func_locations:
+            if file_path in self.component_files:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                except UnicodeDecodeError:
+                    with open(file_path, 'r', encoding='latin-1') as f:
+                        content = f.read()
+
+                # Extract function body
+                body = self.extract_function_body_from_original_content(content, func_name)
+                if not body:
+                    return 1
+
+                # Clean up comments
+                body = self.remove_comments_and_strings(body)
+
+                # Complexity counting rules
+                patterns = [
+                    r'\bif\b',
+                    r'\bfor\b',
+                    r'\bwhile\b',
+                    r'\bcase\b',
+                    r'\bdefault\b',
+                    r'\belse\s+if\b',
+                    r'\bgoto\b',
+                    r'\bcatch\b',
+                    r'\?\s*[^:]+:\s*',  # ternary
+                    r'&&',
+                    r'\|\|'
+                ]
+
+                complexity = 1
+                for pattern in patterns:
+                    complexity += len(re.findall(pattern, body))
+
+                return complexity
+
+        return 1
+
+    def calculate_testability(self, func_name):
+        """分析每個 function 的條件巢狀深度（testability）"""
+        func_locations = self.function_locations.get(func_name, [])
+        if not func_locations:
+            return 0
+
+        for file_path, _ in func_locations:
+            if file_path in self.component_files:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                except UnicodeDecodeError:
+                    with open(file_path, 'r', encoding='latin-1') as f:
+                        content = f.read()
+
+                func_body = self.extract_function_body_from_original_content(content, func_name)
+                if not func_body:
+                    return 0
+
+                func_body = self.remove_comments_and_strings(func_body)
+                lines = func_body.split('\n')
+
+                max_depth = 0
+                current_depth = 0
+                stack = []
+
+                # 關鍵詞會增加深度
+                pattern_increase = re.compile(r'\b(if|else if|else|switch|for|while|do)\b')
+
+                # 使用 stack 來追蹤
+                for line in lines:
+                    line_strip = line.strip()
+
+                    if pattern_increase.match(line_strip):
+                        current_depth += 1
+                        max_depth = max(max_depth, current_depth)
+
+                        # 如果這一行不是 block（沒有 {），我們假設條件會影響下一行
+                        if '{' not in line_strip:
+                            stack.append('virtual')  # 記錄 fake block
+                    elif '{' in line_strip:
+                        stack.append('{')
+                    elif '}' in line_strip:
+                        if stack:
+                            popped = stack.pop()
+                            if popped in ('{', 'virtual'):
+                                current_depth = max(0, current_depth - 1)
+
+                return max_depth
+
+        return 0
+
+
     def calculate_all_attributes(self):
         """Calculate all properties for each function in component"""
         results = {}
@@ -504,11 +606,15 @@ class CFunctionAnalyzer:
             interoperability, interop_details = self.calculate_interoperability(func_name, out_of_component_functions)
             interaction, interact_details = self.calculate_interaction(func_name, component_functions)
             criticality, criticality_details = self.calculate_criticality(func_name)
+            complexity = self.calculate_cyclomatic_complexity(func_name)
+            testability = self.calculate_testability(func_name)
 
             results[func_name] = {
                 'interoperability': interoperability,
                 'interaction': interaction,
                 'criticality': criticality,
+                'complexity': complexity,
+                'testability': testability,
                 'interop_details': interop_details,
                 'interact_details': interact_details,
                 'criticality_details': criticality_details
@@ -564,6 +670,11 @@ class CFunctionAnalyzer:
                     for resource, file_path in data['criticality_details']:
                         print(f"    - Accesses {resource} in {file_path}")
 
+            print(f"  Cyclomatic Complexity: {data['complexity']}")
+
+            print(f"  Testability: {data['testability']}")
+
+
     def print_legacy_results(self):
         """Output legacy results"""
         print("\n" + "="*60)
@@ -598,10 +709,70 @@ class CFunctionAnalyzer:
         for caller, count in sorted_callers:
             print(f"  {caller}: {count} times")
 
+    def export_to_csv(self, results: Dict[str, Dict], output_path: str):
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "Function",
+                "Defined In",
+                "Line(s)",
+                "Interoperability",
+                "Interaction",
+                "Criticality",
+                "Cyclomatic Complexity"
+            ])
+            for func_name, data in results.items():
+                locations = self.function_locations.get(func_name, [])
+                files = "; ".join(f for f, _ in locations)
+                lines = "; ".join(str(ln) for _, ln in locations)
+                writer.writerow([
+                    func_name,
+                    # files,
+                    # lines,
+                    data['interoperability'],
+                    data['interaction'],
+                    data['criticality'],
+                    data['complexity'],
+                    data['testability']
+                ])
+
+    def export_to_excel(self, results: Dict[str, Dict], output_path: str):
+        data = {}
+        for func_name, data_dict in results.items():
+            locs = self.function_locations.get(func_name, [])
+            files = "; ".join(f for f, _ in locs)
+            lines = "; ".join(str(ln) for _, ln in locs)
+            data[func_name] = {
+                # "Defined In": files,
+                # "Line(s)": lines,
+                "Interoperability": data_dict["interoperability"],
+                "Interaction": data_dict["interaction"],
+                "Criticality": data_dict["criticality"],
+                "Cyclomatic Complexity": data_dict["complexity"],
+                "Testability": data_dict["testability"]
+            }
+
+        df = pd.DataFrame(data)
+        # df = df.T  # Transpose
+
+        # Store as Excel (add ".xlsx" if required)
+        if not output_path.endswith(".xlsx"):
+            output_path += ".xlsx"
+
+        df.to_excel(output_path, index=True)
+        print(f"Output as excel: {output_path}")
+
 def main():
     parser = argparse.ArgumentParser(description='Analyze Interoperability, Interaction & Criticality for SW Component (C language)')
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument('-c', '--config', help='Path for config file, component, scope, ignore, share_resource settings should be included')
+    # Required arguments
+    parser.add_argument('-c', '--config', required=True, help='Path to config file')
+
+    # Optional arguments
+    parser.add_argument('-f', '--csv', type=str, help='Export results to CSV file')
+    parser.add_argument('-x', '--xlsx', type=str, help='Export results to .xlsx file')
+
+    args = parser.parse_args()
+
 
     args = parser.parse_args()
 
@@ -631,6 +802,12 @@ def main():
     # Output result
     analyzer.print_detailed_results(results)
     # analyzer.print_legacy_results()
+    if args.csv:
+        analyzer.export_to_csv(results, args.csv)
+        print(f"Output as CSV: {args.csv}")
+
+    if args.xlsx:
+        analyzer.export_to_excel(results, args.xlsx)
 
 if __name__ == "__main__":
     main()
