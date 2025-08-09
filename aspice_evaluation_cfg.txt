@@ -1,0 +1,30 @@
+/**
+ * @file aspice_evaluation_setting.txt
+ * @brief A setting list for calculating ASPICE evaluation result.
+ * @version 1.0.0
+ * @date 2025-07-21
+ *
+ */
+
+
+/* ================================================================================================================= */
+/* "component" tag: Files or folders listed under the "component" tag would be treat as the same SW component     	 */
+/* "scope" tag: The check range for the evaluation.																     */
+/* "ignore" tag: Files or folders to be ignored.																     */
+/* "share_resource" tag: List all the share resources used between functions. It could be a global variable, register or a macro for accessing register	*/
+/* "macro" tag: Macro defintions used in the functions.															     */
+/* ================================================================================================================= */
+[component]
+[/component]
+
+[scope]
+[/scope]
+
+[ignore]
+[/ignore]
+
+[share_resource]
+[/share_resource]
+
+[macro]
+[/macro]

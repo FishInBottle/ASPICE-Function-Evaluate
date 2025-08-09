@@ -429,8 +429,6 @@ class CFunctionAnalyzer:
     def record_function_call(self, file_path, line_num, func_name):
         """Record function call"""
         self.callees.add(func_name)
-        # 這裡需要知道是哪個函數在呼叫，暫時記錄位置
-        # 實際的caller-callee關係在analyze_function_body_calls中處理
 
     def analyze_function_body_calls(self, file_path, caller_func, body, start_line):
         """Analyze function calls in the function body"""
@@ -632,7 +630,7 @@ class CFunctionAnalyzer:
         return 1
 
     def calculate_testability(self, func_name):
-        """分析每個 function 的條件巢狀深度（testability）"""
+        """Calculate depth of conditional nesting for each function (testability)"""
         func_locations = self.function_locations.get(func_name, [])
         if not func_locations:
             return 0
@@ -659,10 +657,10 @@ class CFunctionAnalyzer:
                 current_depth = 0
                 stack = []
 
-                # 關鍵詞會增加深度
+                # Increase depth count for each conditional statement
                 pattern_increase = re.compile(r'\b(if|else if|else|switch|for|while|do)\b')
 
-                # 使用 stack 來追蹤
+                # Track by using a stack
                 for line in lines:
                     line_strip = line.strip()
 
@@ -670,9 +668,9 @@ class CFunctionAnalyzer:
                         current_depth += 1
                         max_depth = max(max_depth, current_depth)
 
-                        # 如果這一行不是 block（沒有 {），我們假設條件會影響下一行
+                        # If the line is not a block (does not contain '{'), we assume the condition affects the next line
                         if '{' not in line_strip:
-                            stack.append('virtual')  # 記錄 fake block
+                            stack.append('virtual')  # Record fake block
                     elif '{' in line_strip:
                         stack.append('{')
                     elif '}' in line_strip:
