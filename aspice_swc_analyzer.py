@@ -15,6 +15,22 @@ from pathlib import Path
 PRINT_DEBUG_INFO = False
 # === Feature Flags end   ===
 
+# === Constants start ===
+"""Risk = High, if all of the properties are larger than the following conditions"""
+RISK_H_INTEROPERABILITY = 4
+RISK_H_INTERACTION = 6
+RISK_H_CRITICALITY = 4
+RISK_H_COMPLEXITY = 12
+RISK_H_TESTABILITY = 5
+"""Risk = Medium, if all of the properties are larger than the following conditions"""
+RISK_M_INTEROPERABILITY = 4
+RISK_M_INTERACTION = 4
+RISK_M_CRITICALITY = 2
+RISK_M_COMPLEXITY = 5
+RISK_M_TESTABILITY = 3
+"""Risk = Low, if NOT all of the properties are larger than the conditions of Medium"""
+# === Constants end   ===
+
 class CFunctionAnalyzer:
     def __init__(self):
         # Keywords for C language, would ingore them all
@@ -168,7 +184,7 @@ class CFunctionAnalyzer:
         return content
 
     def remove_macros(self, content):
-        """Remove macros based on config file definitions"""
+        """Remove macro blocks based on config file definitions"""
         lines = content.splitlines()
         result = []
         skip = False
@@ -669,6 +685,24 @@ class CFunctionAnalyzer:
 
         return 0
 
+    def calculate_risk(self, func_name, interoperability, interaction, criticality, complexity, testability):
+        """Calculate Risk property for a single function"""
+        if interoperability >= RISK_H_INTEROPERABILITY and \
+           interaction >= RISK_H_INTERACTION and \
+           criticality >= RISK_H_CRITICALITY and \
+           complexity >= RISK_H_COMPLEXITY and \
+           testability >= RISK_H_TESTABILITY:
+            return "High"
+
+        elif interoperability >= RISK_M_INTEROPERABILITY and \
+             interaction >= RISK_M_INTERACTION and \
+             criticality >= RISK_M_CRITICALITY and \
+             complexity >= RISK_M_COMPLEXITY and \
+             testability >= RISK_M_TESTABILITY:
+            return "Medium"
+
+        else:
+            return "Low"
 
     def calculate_all_attributes(self):
         """Calculate all properties for each function in component"""
@@ -688,6 +722,7 @@ class CFunctionAnalyzer:
             criticality, criticality_details = self.calculate_criticality(func_name)
             complexity = self.calculate_cyclomatic_complexity(func_name)
             testability = self.calculate_testability(func_name)
+            risk = self.calculate_risk(func_name, interoperability, interaction, criticality, complexity, testability)
 
             results[func_name] = {
                 'interoperability': interoperability,
@@ -695,6 +730,7 @@ class CFunctionAnalyzer:
                 'criticality': criticality,
                 'complexity': complexity,
                 'testability': testability,
+                'risk': risk,
                 'interop_details': interop_details,
                 'interact_details': interact_details,
                 'criticality_details': criticality_details
@@ -753,6 +789,8 @@ class CFunctionAnalyzer:
             print(f"  Cyclomatic Complexity: {data['complexity']}")
 
             print(f"  Testability: {data['testability']}")
+
+            print(f"  Risk: {data['risk']}")
 
 
     def print_legacy_results(self):
@@ -813,7 +851,8 @@ class CFunctionAnalyzer:
                     data['interaction'],
                     data['criticality'],
                     data['complexity'],
-                    data['testability']
+                    data['testability'],
+                    data['risk']
                 ])
 
     def export_to_excel(self, results: Dict[str, Dict], output_path: str):
@@ -829,7 +868,8 @@ class CFunctionAnalyzer:
                 "Interaction": data_dict["interaction"],
                 "Criticality": data_dict["criticality"],
                 "Cyclomatic Complexity": data_dict["complexity"],
-                "Testability": data_dict["testability"]
+                "Testability": data_dict["testability"],
+                "Risk": data_dict["risk"]
             }
 
         df = pd.DataFrame(data)
