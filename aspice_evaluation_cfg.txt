@@ -15,16 +15,26 @@
 /* "macro" tag: Macro defintions used in the functions.															     */
 /* ================================================================================================================= */
 [component]
+submodule\CMSIS_5\CMSIS\Driver\DriverTemplates\Driver_Flash.c
 [/component]
 
 [scope]
+submodule\CMSIS_5\CMSIS\Driver\
 [/scope]
 
 [ignore]
+submodule\CMSIS_5\CMSIS\Driver\VIO\
 [/ignore]
 
 [share_resource]
+ARM_FLASH_DRV_VERSION
+FLASH_SECTOR_INFO
+FlashInfo
+FlashStatus
+DriverVersion
+DriverCapabilities
 [/share_resource]
 
 [macro]
+CHIP_TYPE CHIP_TYPE_NXP
 [/macro]
