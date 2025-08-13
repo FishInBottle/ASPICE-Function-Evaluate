@@ -1,0 +1,3 @@
+[submodule "submodule/CMSIS_5"]
+	path = submodule/CMSIS_5
+	url = https://github.com/FishInBottle/CMSIS_5.git
