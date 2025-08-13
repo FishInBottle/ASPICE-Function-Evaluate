@@ -1,3 +1,0 @@
-[submodule "external/CMSIS_5"]
-	path = external/CMSIS_5
-	url = https://github.com/FishInBottle/CMSIS_5.git
