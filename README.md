@@ -67,3 +67,23 @@ RISK_M_CRITICALITY
 RISK_M_COMPLEXITY
 RISK_M_TESTABILITY
 ```
+
+# How to execute this evaluation with example code?
+
+Clone ASPICE evaluation repo
+```
+git clone git@github.com:FishInBottle/ASPICE-Function-Evaluate.git
+```
+
+Update submodule for test
+```
+cd ASPICE-Function-Evaluate
+git submodule update --init --recursive
+```
+
+Sparse Checkout (remained CMSIS/Driver only)
+```
+cd submodule/CMSIS_5
+git sparse-checkout init --cone
+git sparse-checkout set CMSIS/Driver
+```
